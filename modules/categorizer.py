@@ -1,9 +1,9 @@
 CATEGORIES = {
-    "Food & Dining":  ["starbucks", "chick-fil-A", "doordash", "restaurant", "pizza", "kfc", "subway"],
+    "Food & Dining":  ["starbucks", "chick-fil-a", "chick fil a", "doordash", "uber eats", "restaurant", "pizza", "kfc", "subway", "panda express", "in & out"],
     "Transport":      ["uber", "lyft", "gas", "parking", "bus", "train", "bolt", "plane", "flight"],
     "Shopping":       ["amazon", "walmart", "target", "fashion nova", "shein", "temu", "online order"],
-    "Bills":          ["electricity", "water", "internet", "phone", "rent", "netflix", "spotify", "disney+"],
-    "Entertainment":  ["cinema", "movies", "games", "steam", "youtube"],
+    "Bills":          ["electricity", "water", "internet", "phone", "rent", "netflix", "spotify", "disney+", "mortgage"],
+    "Entertainment":  ["cinema", "movies", "games", "steam", "youtube", "game night"],
     "Income":         ["salary", "paycheck", "freelance", "transfer in", "deposit"],
 }
 
