@@ -58,7 +58,7 @@ elif page == "Dashboard":
                     st.error(f"⚠️ {w}")
 
             else:
-                st.success("✅ You're within budget on everything!")
+                st.success("✅ You're within budget on everything!") 
 
         st.subheader("Spending by Category")
         if totals:
