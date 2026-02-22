@@ -130,3 +130,5 @@ elif page == "Set Budget":
         st.subheader("Current Budget Limits")
         for cat, limit in current_budget.items():
             st.write(f"**{cat}:** ${limit:.2f}")
+
+            #PHASE 5: OFFICIALLY DONE!
