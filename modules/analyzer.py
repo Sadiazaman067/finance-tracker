@@ -10,20 +10,24 @@ def total_by_category(transactions):
                 totals[category] = 0
             totals[category] += amount
     return totals
-
 def check_budget(totals, budget):
     warnings = []
     for category, limit in budget.items():
         spent = totals.get(category, 0)
         if spent > limit:
-            warnings.append(f"{category}: You have spent \${spent:.2f} but your budget is \${limit:.2f}")
-
+            warnings.append(f"OVER BUDGET- {category}: spent \${spent:.2f} but budget is \${limit:.2f}")
     return warnings
 def detect_unusual(transactions):
     flagged = []
-    by_category ={}
+    by_category = {}
     for t in transactions:
-        if t["amount"] < 0 and t["category"] != "" and t["category"] in by_category:
+        if t["amount"] < 0 and t["category"] != "":
+            cat = t["category"]
+            if cat not in by_category:
+                by_category[cat] = []
+            by_category[cat].append(abs(t["amount"]))
+    for t in transactions:
+        if t["amount"] < 0 and t["category"] != "":
             cat = t["category"]
             amounts = by_category[cat]
             if len(amounts) >= 2:
