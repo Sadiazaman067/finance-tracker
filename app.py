@@ -3,132 +3,201 @@ import json
 import os
 import plotly.express as px
 import pandas as pd
+import streamlit_authenticator as stauth
+import yaml
+from yaml.loader import SafeLoader
+from datetime import datetime
 from modules.storage import save_transaction, load_transactions, clear_all
 from modules.categorizer import categorize
 from modules.analyzer import total_by_category, check_budget, detect_unusual, predict_month_end
 
-st.set_page_config(page_title="Finance Tracker", page_icon="💰", layout="wide")
+st.set_page_config(page_title="PennyBloom", page_icon="🌸", layout="wide")
 
-st.sidebar.title("💰 Finance Tracker")
-page = st.sidebar.radio("Navigate", ["Add Transaction", "Dashboard", "Insights", "Set Budget"])
+# ── LOAD CONFIG & AUTHENTICATE ──────────────────────────────────────────
+with open("config.yaml") as file:
+    config = yaml.load(file, Loader=SafeLoader)
 
-if page == "Add Transaction":
-    st.title("Add a Transaction")
-    description = st.text_input("Description (e.g. Starbucks, Uber ride)")
-    amount = st.number_input("Amount", step=0.01)
-    transaction_type = st.radio("Type", ["Expense", "Income"])
-    date = st.date_input("Date")
-    if st.button("Save Transaction"):
-        if description == "":
-            st.warning("Please enter a description!")
+authenticator = stauth.Authenticate(
+    config["credentials"],
+    config["cookie"]["name"],
+    config["cookie"]["key"],
+    config["cookie"]["expiry_days"]
+)
+
+authenticator.login()
+
+if st.session_state["authentication_status"] is False:
+    st.error("Username or password is incorrect")
+    st.stop()
+
+elif st.session_state["authentication_status"] is None:
+    st.warning("Please enter your username and password")
+    st.stop()
+
+elif st.session_state["authentication_status"]:
+    username = st.session_state["username"]
+    name = st.session_state["name"]
+
+    # ── USER SPECIFIC DATA PATHS ─────────────────────────────────────────
+    USER_DATA_DIR = f"data/{username}"
+    TRANSACTIONS_FILE = f"{USER_DATA_DIR}/transactions.json"
+    BUDGET_FILE = f"{USER_DATA_DIR}/budget.json"
+
+    os.makedirs(USER_DATA_DIR, exist_ok=True)
+
+    def save_user_transaction(transaction):
+        transactions = load_user_transactions()
+        transactions.append(transaction)
+        with open(TRANSACTIONS_FILE, "w") as f:
+            json.dump(transactions, f, indent=4)
+
+    def load_user_transactions():
+        if not os.path.exists(TRANSACTIONS_FILE):
+            return []
+        with open(TRANSACTIONS_FILE, "r") as f:
+            return json.load(f)
+
+    # ── SIDEBAR ──────────────────────────────────────────────────────────
+    st.sidebar.title(f"🌸 Welcome, {name}!")
+    page = st.sidebar.radio("Navigate", ["Add Transaction", "Dashboard", "Insights", "Set Budget"])
+    authenticator.logout("Logout", "sidebar")
+
+    # ── ADD TRANSACTION ──────────────────────────────────────────────────
+    if page == "Add Transaction":
+        st.title("Add a Transaction")
+        description = st.text_input("Description (e.g. Starbucks, Uber ride)")
+        amount = st.number_input("Amount", step=0.01)
+        transaction_type = st.radio("Type", ["Expense", "Income"])
+        date = st.date_input("Date")
+        if st.button("Save Transaction"):
+            if description == "":
+                st.warning("Please enter a description!")
+            else:
+                category = categorize(description)
+                final_amount = -abs(amount) if transaction_type == "Expense" else abs(amount)
+                save_user_transaction({
+                    "date": str(date),
+                    "description": description,
+                    "amount": final_amount,
+                    "category": category
+                })
+                st.success(f"✅ Saved! Categorized as: {category}")
+
+    # ── DASHBOARD ────────────────────────────────────────────────────────
+    elif page == "Dashboard":
+        st.title("Dashboard")
+        transactions = load_user_transactions()
+        if len(transactions) == 0:
+            st.info("No transactions yet! Add some first.")
         else:
-            category = categorize(description)
-            final_amount = -abs(amount) if transaction_type == "Expense" else abs(amount)
-            save_transaction({
-                "date": str(date),
-                "description": description,
-                "amount": final_amount,
-                "category": category
-            })
-            st.success(f"✅ Saved! Categorized as: {category}")
+            totals = total_by_category(transactions)
+            total_income = sum(t["amount"] for t in transactions if t["amount"] > 0)
+            total_expenses = sum(abs(t["amount"]) for t in transactions if t["amount"] < 0)
 
-elif page == "Dashboard":
-    st.title("Dashboard")
-    transactions = load_transactions()
-    if len(transactions) == 0:
-        st.info("No transactions yet! Add some first.")
-    else:
-        totals = total_by_category(transactions)
-        total_income = sum(t["amount"] for t in transactions if t["amount"] > 0)
-        total_expenses = sum(abs(t["amount"]) for t in transactions if t["amount"] < 0)
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Total Income", f"${total_income:.2f}")
+            col2.metric("Total Expenses", f"${total_expenses:.2f}")
+            col3.metric("Balance", f"${total_income - total_expenses:.2f}")
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Income", f"${total_income:.2f}")
-        col2.metric("Total Expenses", f"${total_expenses:.2f}")
-        col3.metric("Balance", f"${total_income - total_expenses:.2f}")
+            if os.path.exists(BUDGET_FILE):
+                with open(BUDGET_FILE, "r") as f:
+                    budget = json.load(f)
+                budget_warnings = check_budget(totals, budget)
+                if budget_warnings:
+                    st.subheader("⚠️ Budget Warnings")
+                    for w in budget_warnings:
+                        st.error(f"⚠️ {w}")
+                else:
+                    st.success("✅ You're within budget on everything!")
 
-        BUDGET_FILE = "data/budget.json"
+            st.subheader("Spending by Category")
+            if totals:
+                fig = px.bar(
+                    x=list(totals.keys()),
+                    y=list(totals.values()),
+                    labels={"x": "Category", "y": "Amount ($)"},
+                    color=list(totals.keys())
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.subheader("All Transactions")
+            df = pd.DataFrame(transactions)
+            st.dataframe(df, use_container_width=True)
+
+    # ── INSIGHTS ─────────────────────────────────────────────────────────
+    elif page == "Insights":
+        st.title("Insights")
+        transactions = load_user_transactions()
+        if len(transactions) == 0:
+            st.info("No transactions yet! Add some first.")
+        else:
+            prediction = predict_month_end(transactions)
+            unusual = detect_unusual(transactions)
+
+            st.subheader("📅 Month End Prediction")
+            st.metric("Predicted Monthly Spending", f"${prediction:.2f}")
+
+            st.subheader("🚨 Unusual Transactions")
+            if len(unusual) == 0:
+                st.success("No unusual spending detected!")
+            else:
+                for flag in unusual:
+                    st.warning(flag)
+
+            st.subheader("🥧 Spending Breakdown")
+            totals = total_by_category(transactions)
+            if totals:
+                fig = px.pie(
+                    values=list(totals.values()),
+                    names=list(totals.keys()),
+                    title="Where your money is going"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    # ── SET BUDGET ───────────────────────────────────────────────────────
+    elif page == "Set Budget":
+        st.title("Set Your Budget")
+
         if os.path.exists(BUDGET_FILE):
             with open(BUDGET_FILE, "r") as f:
-                budget = json.load(f)
-            budget_warnings = check_budget(totals, budget)
-            if budget_warnings:
-                st.subheader("⚠️ Budget Warnings")
-                for w in budget_warnings:
-                    st.error(f"⚠️ {w}")
-
-            else:
-                st.success("✅ You're within budget on everything!") 
-
-        st.subheader("Spending by Category")
-        if totals:
-            fig = px.bar(
-                x=list(totals.keys()),
-                y=list(totals.values()),
-                labels={"x": "Category", "y": "Amount ($)"},
-                color=list(totals.keys())
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("All Transactions")
-        df = pd.DataFrame(transactions)
-        st.dataframe(df, use_container_width=True)
-
-elif page == "Insights":
-    st.title("Insights")
-    transactions = load_transactions()
-    if len(transactions) == 0:
-        st.info("No transactions yet! Add some first.")
-    else:
-        prediction = predict_month_end(transactions)
-        unusual = detect_unusual(transactions)
-
-        st.subheader("📅 Month End Prediction")
-        st.metric("Predicted Monthly Spending", f"${prediction:.2f}")
-
-        st.subheader("🚨 Unusual Transactions")
-        if len(unusual) == 0:
-            st.success("No unusual spending detected!")
+                current_budget = json.load(f)
         else:
-            for flag in unusual:
-                st.warning(flag)
+            current_budget = {}
 
-        st.subheader("🥧 Spending Breakdown")
-        totals = total_by_category(transactions)
-        if totals:
-            fig = px.pie(
-                values=list(totals.values()),
-                names=list(totals.keys()),
-                title="Where your money is going"
+        st.subheader("Set monthly limits for each category")
+        categories = ["Food & Dining", "Transport", "Shopping", "Bills", "Entertainment", "Other"]
+        new_budget = {}
+
+        for category in categories:
+            default = current_budget.get(category, 0.0)
+            new_budget[category] = st.number_input(
+                f"{category} ($)",
+                value=float(default),
+                step=10.0,
+                min_value=0.0
             )
-            st.plotly_chart(fig, use_container_width=True)
 
-elif page == "Set Budget":
-    st.title("Set Your Budget")
-    BUDGET_FILE = "data/budget.json"
-    if os.path.exists(BUDGET_FILE):
-        with open(BUDGET_FILE, "r") as f:
-            current_budget = json.load(f)
-    else:
-        current_budget = {}
-    st.subheader("Set monthly limits for each category")
-    categories = ["Food & Dining", "Transport", "Shopping", "Bills", "Entertainment", "Other"]
-    new_budget = {}
-    for category in categories:
-        default = current_budget.get(category, 0.0)
-        new_budget[category] = st.number_input(
-            f"{category} ($)",
-            value=float(default),
-            step=10.0,
-            min_value=0.0
-        )
-    if st.button("Save Budget"):
-        with open(BUDGET_FILE, "w") as f:
-            json.dump(new_budget, f, indent=4)
-        st.success("✅ Budget saved!")
-    if current_budget:
-        st.subheader("Current Budget Limits")
-        for cat, limit in current_budget.items():
-            st.write(f"**{cat}:** ${limit:.2f}")
+        if st.button("Save Budget"):
+            with open(BUDGET_FILE, "w") as f:
+                json.dump(new_budget, f, indent=4)
+            st.success("✅ Budget saved!")
 
-            #PHASE 5: OFFICIALLY DONE!
+        if current_budget:
+            st.subheader("Current Budget Limits")
+            for cat, limit in current_budget.items():
+                st.write(f"**{cat}:** ${limit:.2f}")
+
+        st.divider()
+        st.subheader("📄 Download Monthly Report")
+        transactions = load_user_transactions()
+        if len(transactions) == 0:
+            st.info("No transactions yet to generate a report!")
+        else:
+            from modules.reports import generate_monthly_report
+            pdf_bytes = generate_monthly_report(transactions, current_budget)
+            st.download_button(
+                label="📥 Download PDF Report",
+                data=bytes(pdf_bytes),
+                file_name=f"pennybloom_report_{datetime.today().strftime('%B_%Y')}.pdf",
+                mime="application/pdf"
+            )
