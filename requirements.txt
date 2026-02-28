@@ -2,3 +2,4 @@ streamlit
 pandas
 plotly
 fpdf2
+streamlit-authenticator
