@@ -3,3 +3,4 @@ __pycache__/
 data/transactions.json
 data/budget.json
 config.yaml
+data/*/transactions.json

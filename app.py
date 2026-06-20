@@ -1,66 +1,78 @@
 import streamlit as st
-import json
-import os
 import plotly.express as px
 import pandas as pd
-import streamlit_authenticator as stauth
-import yaml
-from yaml.loader import SafeLoader
 from datetime import datetime
-from modules.storage import save_transaction, load_transactions, clear_all
+from modules.database import (init_db, register_user, login_user,
+                               save_transaction, load_transactions,
+                               save_budget, load_budget)
 from modules.categorizer import categorize
 from modules.analyzer import total_by_category, check_budget, detect_unusual, predict_month_end
 
 st.set_page_config(page_title="PennyBloom", page_icon="🌸", layout="wide")
 
-# ── LOAD CONFIG & AUTHENTICATE ──────────────────────────────────────────
-with open("config.yaml") as file:
-    config = yaml.load(file, Loader=SafeLoader)
+# Initialize database
+init_db()
 
-authenticator = stauth.Authenticate(
-    config["credentials"],
-    config["cookie"]["name"],
-    config["cookie"]["key"],
-    config["cookie"]["expiry_days"]
-)
+# ── SESSION STATE SETUP ──────────────────────────────────────────────────
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
+if "name" not in st.session_state:
+    st.session_state.name = ""
 
-authenticator.login()
+# ── AUTH PAGES ───────────────────────────────────────────────────────────
+if not st.session_state.logged_in:
+    st.title("🌸 PennyBloom")
+    tab1, tab2 = st.tabs(["Login", "Create Account"])
 
-if st.session_state["authentication_status"] is False:
-    st.error("Username or password is incorrect")
-    st.stop()
+    with tab1:
+        st.subheader("Welcome back!")
+        login_username = st.text_input("Username", key="login_user")
+        login_password = st.text_input("Password", type="password", key="login_pass")
+        if st.button("Login"):
+            name = login_user(login_username, login_password)
+            if name:
+                st.session_state.logged_in = True
+                st.session_state.username = login_username
+                st.session_state.name = name
+                st.rerun()
+            else:
+                st.error("Incorrect username or password!")
 
-elif st.session_state["authentication_status"] is None:
-    st.warning("Please enter your username and password")
-    st.stop()
+    with tab2:
+        st.subheader("Join PennyBloom!")
+        reg_name = st.text_input("Full Name", key="reg_name")
+        reg_email = st.text_input("Email", key="reg_email")
+        reg_username = st.text_input("Choose a Username", key="reg_user")
+        reg_password = st.text_input("Choose a Password", type="password", key="reg_pass")
+        reg_password2 = st.text_input("Confirm Password", type="password", key="reg_pass2")
+        if st.button("Create Account"):
+            if not reg_name or not reg_email or not reg_username or not reg_password:
+                st.warning("Please fill in all fields!")
+            elif reg_password != reg_password2:
+                st.error("Passwords don't match!")
+            elif len(reg_password) < 6:
+                st.warning("Password must be at least 6 characters!")
+            else:
+                success = register_user(reg_username, reg_name, reg_email, reg_password)
+                if success:
+                    st.success("✅ Account created! You can now log in.")
+                else:
+                    st.error("Username or email already exists!")
 
-elif st.session_state["authentication_status"]:
-    username = st.session_state["username"]
-    name = st.session_state["name"]
-
-    # ── USER SPECIFIC DATA PATHS ─────────────────────────────────────────
-    USER_DATA_DIR = f"data/{username}"
-    TRANSACTIONS_FILE = f"{USER_DATA_DIR}/transactions.json"
-    BUDGET_FILE = f"{USER_DATA_DIR}/budget.json"
-
-    os.makedirs(USER_DATA_DIR, exist_ok=True)
-
-    def save_user_transaction(transaction):
-        transactions = load_user_transactions()
-        transactions.append(transaction)
-        with open(TRANSACTIONS_FILE, "w") as f:
-            json.dump(transactions, f, indent=4)
-
-    def load_user_transactions():
-        if not os.path.exists(TRANSACTIONS_FILE):
-            return []
-        with open(TRANSACTIONS_FILE, "r") as f:
-            return json.load(f)
+else:
+    username = st.session_state.username
+    name = st.session_state.name
 
     # ── SIDEBAR ──────────────────────────────────────────────────────────
     st.sidebar.title(f"🌸 Welcome, {name}!")
     page = st.sidebar.radio("Navigate", ["Add Transaction", "Dashboard", "Insights", "Set Budget"])
-    authenticator.logout("Logout", "sidebar")
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.username = ""
+        st.session_state.name = ""
+        st.rerun()
 
     # ── ADD TRANSACTION ──────────────────────────────────────────────────
     if page == "Add Transaction":
@@ -75,7 +87,7 @@ elif st.session_state["authentication_status"]:
             else:
                 category = categorize(description)
                 final_amount = -abs(amount) if transaction_type == "Expense" else abs(amount)
-                save_user_transaction({
+                save_transaction(username, {
                     "date": str(date),
                     "description": description,
                     "amount": final_amount,
@@ -86,7 +98,7 @@ elif st.session_state["authentication_status"]:
     # ── DASHBOARD ────────────────────────────────────────────────────────
     elif page == "Dashboard":
         st.title("Dashboard")
-        transactions = load_user_transactions()
+        transactions = load_transactions(username)
         if len(transactions) == 0:
             st.info("No transactions yet! Add some first.")
         else:
@@ -99,9 +111,8 @@ elif st.session_state["authentication_status"]:
             col2.metric("Total Expenses", f"${total_expenses:.2f}")
             col3.metric("Balance", f"${total_income - total_expenses:.2f}")
 
-            if os.path.exists(BUDGET_FILE):
-                with open(BUDGET_FILE, "r") as f:
-                    budget = json.load(f)
+            budget = load_budget(username)
+            if budget:
                 budget_warnings = check_budget(totals, budget)
                 if budget_warnings:
                     st.subheader("⚠️ Budget Warnings")
@@ -127,7 +138,7 @@ elif st.session_state["authentication_status"]:
     # ── INSIGHTS ─────────────────────────────────────────────────────────
     elif page == "Insights":
         st.title("Insights")
-        transactions = load_user_transactions()
+        transactions = load_transactions(username)
         if len(transactions) == 0:
             st.info("No transactions yet! Add some first.")
         else:
@@ -157,12 +168,7 @@ elif st.session_state["authentication_status"]:
     # ── SET BUDGET ───────────────────────────────────────────────────────
     elif page == "Set Budget":
         st.title("Set Your Budget")
-
-        if os.path.exists(BUDGET_FILE):
-            with open(BUDGET_FILE, "r") as f:
-                current_budget = json.load(f)
-        else:
-            current_budget = {}
+        current_budget = load_budget(username)
 
         st.subheader("Set monthly limits for each category")
         categories = ["Food & Dining", "Transport", "Shopping", "Bills", "Entertainment", "Other"]
@@ -178,8 +184,7 @@ elif st.session_state["authentication_status"]:
             )
 
         if st.button("Save Budget"):
-            with open(BUDGET_FILE, "w") as f:
-                json.dump(new_budget, f, indent=4)
+            save_budget(username, new_budget)
             st.success("✅ Budget saved!")
 
         if current_budget:
@@ -189,7 +194,7 @@ elif st.session_state["authentication_status"]:
 
         st.divider()
         st.subheader("📄 Download Monthly Report")
-        transactions = load_user_transactions()
+        transactions = load_transactions(username)
         if len(transactions) == 0:
             st.info("No transactions yet to generate a report!")
         else:
@@ -201,3 +206,4 @@ elif st.session_state["authentication_status"]:
                 file_name=f"pennybloom_report_{datetime.today().strftime('%B_%Y')}.pdf",
                 mime="application/pdf"
             )
+
